@@ -1,0 +1,25 @@
+plugins {
+    id 'java'
+}
+
+group 'com.github.enimaloc'
+version '0.0.0'
+
+repositories {
+    mavenCentral()
+    jcenter()
+    maven { url "https://m2.chew.pro/releases" }
+    maven { url "https://m2.dv8tion.net/releases" }
+}
+
+dependencies {
+    implementation 'pw.chew:jda-chewtils:1.20.2'
+    implementation 'net.dv8tion:JDA:4.3.0_280'
+
+    implementation 'ch.qos.logback:logback-classic:1.2.3'
+    implementation 'io.sentry:sentry:5.0.0'
+}
+
+test {
+    print "No test defined"
+}
