@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger;
 import io.sentry.Sentry;
 import org.slf4j.LoggerFactory;
 
+import javax.security.auth.login.LoginException;
 import java.util.Locale;
 
 public class Main {
@@ -23,12 +24,13 @@ public class Main {
                 options.setEnvironment(System.getenv("dev") != null ? "Development" : "Production");
             });
         }
-        
+    
         try {
-            throw new Exception("Test Sentry report");
-        } catch (Exception e) {
-            LoggerFactory.getLogger(Main.class).error("That's suck", e);
+            new Yui();
+        } catch (LoginException e) {
+            LoggerFactory.getLogger(Main.class).error("Invalid token", e);
         }
+    
     }
     
 }
