@@ -1,4 +1,4 @@
-package com.github.enimaloc.yui;
+package fr.enimaloc.yui;
 
 public class Constant {
     public static final Version VERSION = new Version(0, 0, 0, new String[]{"beta"}, new String[]{"draft"});

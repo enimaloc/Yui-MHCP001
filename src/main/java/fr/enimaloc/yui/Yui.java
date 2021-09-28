@@ -1,12 +1,10 @@
-package com.github.enimaloc.yui;
+package fr.enimaloc.yui;
 
-import ch.qos.logback.classic.Level;
-import com.github.enimaloc.yui.internal.MixedCommand;
-import com.jagrosh.jdautilities.command.Command;
 import com.jagrosh.jdautilities.command.CommandClient;
 import com.jagrosh.jdautilities.command.CommandClientBuilder;
 import com.jagrosh.jdautilities.command.SlashCommand;
 import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
+import java.util.Arrays;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Activity;
@@ -14,9 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.auth.login.LoginException;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
 
 public class Yui {
     
@@ -30,16 +25,14 @@ public class Yui {
         Runtime.getRuntime().addShutdownHook(new Thread(this::disconnect));
         
         this.eventWaiter = new EventWaiter();
-    
-        List<MixedCommand> mixedCommand = Arrays.asList();
-        
+
         this.client = new CommandClientBuilder()
                 .setActivity(Activity.watching("players"))
                 .setHelpWord("help")
                 .setEmojis(Constant.EMOJI_SUCCESS, Constant.EMOJI_WARNING, Constant.EMOJI_ERROR)
                 .setPrefix(Constant.PREFIX)
-                .addSlashCommands(mixedCommand.toArray(SlashCommand[]::new))
-                .addCommands(mixedCommand.toArray(Command[]::new))
+                .addSlashCommands(new SlashCommand[]{
+                })
                 .setOwnerId(Constant.OWNERS_ID[0]+"")
                 .setCoOwnerIds(
                         Arrays.stream(Arrays.copyOfRange(Constant.OWNERS_ID, 1, Constant.OWNERS_ID.length))

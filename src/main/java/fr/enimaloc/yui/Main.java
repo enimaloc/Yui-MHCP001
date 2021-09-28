@@ -1,4 +1,4 @@
-package com.github.enimaloc.yui;
+package fr.enimaloc.yui;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;

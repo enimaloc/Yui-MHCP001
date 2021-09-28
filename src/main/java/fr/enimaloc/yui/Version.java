@@ -1,6 +1,6 @@
-package com.github.enimaloc.yui;
+package fr.enimaloc.yui;
 
-import com.github.enimaloc.yui.utils.IntUtils;
+import fr.enimaloc.enutils.classes.NumberUtils;
 import org.jetbrains.annotations.NotNull;
 
 class Version implements Comparable<Version> {
@@ -55,7 +55,7 @@ class Version implements Comparable<Version> {
                     throw new IllegalArgumentException(
                             "Pre-Release need to match with this regex \"" + PRE_RELEASE_REGEX[0][0] + "\" (" + s + ")");
                 }
-            } else if (IntUtils.getInt(s).isPresent()) {
+            } else if (NumberUtils.getSafe(s, Integer.class).isPresent()) {
                 if (!s.matches(PRE_RELEASE_REGEX[0][1])) {
                     throw new IllegalArgumentException(
                             "Pre-Release need to match with this regex \"" + PRE_RELEASE_REGEX[0][1] + "\" (" + s + ")");
