@@ -9,6 +9,10 @@ import io.sentry.Sentry;
 import io.sentry.SentryEvent;
 import io.sentry.SentryLevel;
 import io.sentry.protocol.Message;
+import java.util.ArrayList;
+import java.util.List;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.VoiceChannel;
 
 /**
  * Holder for both the player and a track scheduler for one guild.
@@ -24,13 +28,18 @@ public class GuildMusicManager {
     public final TrackScheduler scheduler;
 
     /**
+     * Skip vote
+     */
+    public List<Member> wantToSkip = new ArrayList<>();
+
+    /**
      * Creates a player and a track scheduler.
      *
      * @param manager Audio player manager to use for creating the player.
      */
     public GuildMusicManager(AudioPlayerManager manager) {
-        player    = manager.createPlayer();
-        scheduler = new TrackScheduler(player) {
+        this.player    = manager.createPlayer();
+        this.scheduler = new TrackScheduler(player) {
             @Override
             public void onTrackException(
                     AudioPlayer player, AudioTrack track, FriendlyException exception

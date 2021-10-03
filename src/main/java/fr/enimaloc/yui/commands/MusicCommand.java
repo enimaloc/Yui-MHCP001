@@ -3,7 +3,6 @@ package fr.enimaloc.yui.commands;
 import com.jagrosh.jdautilities.command.SlashCommand;
 import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
 import com.sedmelluq.discord.lavaplayer.player.AudioLoadResultHandler;
-import com.sedmelluq.discord.lavaplayer.source.youtube.YoutubeAudioSourceManager;
 import com.sedmelluq.discord.lavaplayer.source.youtube.YoutubeAudioTrack;
 import com.sedmelluq.discord.lavaplayer.tools.FriendlyException;
 import com.sedmelluq.discord.lavaplayer.track.AudioItem;
@@ -12,12 +11,15 @@ import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackInfo;
 import fr.enimaloc.enutils.classes.DateUtils;
 import fr.enimaloc.enutils.classes.ObjectUtils;
+import fr.enimaloc.yui.music.GuildMusicManager;
 import fr.enimaloc.yui.music.MusicManager;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.Permission;
@@ -26,12 +28,14 @@ import net.dv8tion.jda.api.events.interaction.ButtonClickEvent;
 import net.dv8tion.jda.api.events.interaction.GenericInteractionCreateEvent;
 import net.dv8tion.jda.api.events.interaction.SelectionMenuEvent;
 import net.dv8tion.jda.api.events.interaction.SlashCommandEvent;
+import net.dv8tion.jda.api.exceptions.ErrorHandler;
 import net.dv8tion.jda.api.interactions.InteractionHook;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.OptionData;
 import net.dv8tion.jda.api.interactions.components.Button;
 import net.dv8tion.jda.api.interactions.components.Component;
 import net.dv8tion.jda.api.interactions.components.selections.SelectionMenu;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.restaction.interactions.ReplyAction;
 
 public class MusicCommand extends SlashCommand {
@@ -47,7 +51,8 @@ public class MusicCommand extends SlashCommand {
         this.help = "Music related command";
 
         this.children = new SlashCommand[]{
-                new Play()
+                new Play(),
+                new Skip()
         };
     }
 
@@ -143,8 +148,8 @@ public class MusicCommand extends SlashCommand {
             @SuppressWarnings("DuplicatedCode")
             @Override
             public void trackLoaded(AudioTrack track) {
-                Guild           guild  = event.getGuild();
-                Member          member = event.getMember();
+                Guild  guild  = event.getGuild();
+                Member member = event.getMember();
                 if (guild == null || member == null) {
                     return;
                 }
@@ -316,6 +321,103 @@ public class MusicCommand extends SlashCommand {
                 return builder;
             }
 
+        }
+    }
+
+    @SuppressWarnings("DuplicatedCode")
+    private class Skip extends SlashCommand {
+
+        public Skip() {
+            this.name = "skip"; // Will be used as the sub command.
+            this.help = "Skip a music";
+
+            this.options = List.of(
+                    new OptionData(OptionType.INTEGER, "jump", "Jump `x` tracks"),
+                    new OptionData(OptionType.BOOLEAN, "force", "Force track skip")
+            );
+        }
+
+        @Override
+        public void execute(SlashCommandEvent event) {
+            long jump = event.getOption("jump") != null ?
+                    Objects.requireNonNull(event.getOption("jump")).getAsLong() :
+                    1;
+
+            Guild  guild  = event.getGuild();
+            Member member = event.getMember();
+            if (guild == null || member == null) {
+                return;
+            }
+            GuildVoiceState voiceState   = member.getVoiceState();
+            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
+            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
+                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
+            }
+            if (voiceChannel == null) {
+                return;
+            }
+
+            GuildMusicManager player = musicManager.getGuildAudioPlayer(guild);
+            player.wantToSkip.add(event.getMember());
+            AtomicLong needForSkip = new AtomicLong(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+            if (player.wantToSkip.size() >= needForSkip.get() ||
+                (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
+                 hasPermDJ(member, voiceChannel))) {
+                for (int i = 0; i < jump; i++) {
+                    musicManager.skip(guild);
+                }
+                event.reply("Skipping `%s` tracks".formatted(jump)).complete();
+                player.wantToSkip.clear();
+            } else {
+                InteractionHook hook = event.reply(("`%s/%s needed for skipping` want to skip %s song," +
+                                                    " click one button below for vote").formatted(
+                                                    player.wantToSkip.size(),
+                                                    needForSkip.get(),
+                                                    jump))
+                                            .addActionRow(Button.secondary("skip", "Skip song"))
+                                            .complete();
+
+                wait(jump, guild, voiceChannel, player, needForSkip, hook);
+            }
+        }
+
+        private void wait(
+                long jump, Guild guild, VoiceChannel voiceChannel, GuildMusicManager player, AtomicLong needForSkip,
+                InteractionHook hook
+        ) {
+            AudioTrack playingTrack = player.player.getPlayingTrack();
+            eventWaiter.waitForEvent(ButtonClickEvent.class,
+                                     bce -> bce.getMessageIdLong() ==
+                                            hook.retrieveOriginal().complete().getIdLong() &&
+                                            !player.wantToSkip.contains(bce.getMember()),
+                                     bce -> {
+                                         needForSkip.set(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+                                         player.wantToSkip.add(bce.getMember());
+
+                                         if (player.wantToSkip.size() >= needForSkip.get()) {
+                                             for (int i = 0; i < jump; i++) {
+                                                 musicManager.skip(guild);
+                                             }
+                                             bce.editMessage("Skipping `%s` tracks".formatted(jump))
+                                                .setActionRow(bce.getButton().asDisabled())
+                                                .complete();
+                                             player.wantToSkip.clear();
+                                         } else {
+                                             bce.editMessage(("`%s/%s needed for skipping` want to skip %s song," +
+                                                              " click one button below for vote").formatted(
+                                                     player.wantToSkip.size(),
+                                                     needForSkip.get(),
+                                                     jump)).complete();
+                                             wait(jump, guild, voiceChannel, player, needForSkip, hook);
+                                         }
+                                     },
+                                     playingTrack.getDuration() - playingTrack.getPosition(),
+                                     TimeUnit.MILLISECONDS,
+                                     () -> hook.editOriginal("~~%s~~\nTrack end, vote cancelled".formatted(
+                                                       hook.retrieveOriginal().complete().getContentRaw()))
+                                               .setActionRow(Button.secondary("skip", "Skip song").asDisabled())
+                                               .queue(unused -> player.wantToSkip.clear(),
+                                                      new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE)));
         }
     }
 
