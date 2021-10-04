@@ -58,7 +58,9 @@ public class MusicCommand extends SlashCommand {
         this.children = new SlashCommand[]{
                 new Play(),
                 new Skip(),
-                new Stop()
+                new Stop(),
+                new Queue(),
+                new Pause()
         };
     }
 
@@ -470,25 +472,41 @@ public class MusicCommand extends SlashCommand {
         public Queue() {
             this.name = "queue";
             this.help = "Track queue related command";
-
-            this.children = new SlashCommand[]{
-                    new Clear()
-            };
+            this.defaultEnabled = false;
         }
 
         @Override
         protected void execute(SlashCommandEvent event) {
         }
+    }
 
-        private class Clear extends SlashCommand {
-            public Clear() {
-                this.name = "clear";
-                this.help = "Clear the queue";
+    @SuppressWarnings("DuplicatedCode")
+    private class Pause extends SlashCommand {
+
+        public Pause() {
+            this.name = "pause";
+            this.help = "(Un)pause music";
+        }
+
+        @Override
+        protected void execute(SlashCommandEvent event) {
+            Guild  guild  = event.getGuild();
+            Member member = event.getMember();
+            if (guild == null || member == null) {
+                return;
+            }
+            GuildVoiceState voiceState   = member.getVoiceState();
+            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
+            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
+                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
+            }
+            if (voiceChannel == null || !voiceChannel.getMembers().contains(event.getMember())) {
+                return;
             }
 
-            @Override
-            protected void execute(SlashCommandEvent event) {
-            }
+            boolean paused = musicManager.getGuildAudioPlayer(guild).player.isPaused();
+            musicManager.getGuildAudioPlayer(guild).player.setPaused(!paused);
+            event.reply((paused ? "Unp" : "P")+"aused the music").complete();
         }
     }
 
