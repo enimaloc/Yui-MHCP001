@@ -16,11 +16,15 @@ import fr.enimaloc.yui.music.MusicManager;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.*;
@@ -32,6 +36,7 @@ import net.dv8tion.jda.api.exceptions.ErrorHandler;
 import net.dv8tion.jda.api.interactions.InteractionHook;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.OptionData;
+import net.dv8tion.jda.api.interactions.components.ActionRow;
 import net.dv8tion.jda.api.interactions.components.Button;
 import net.dv8tion.jda.api.interactions.components.Component;
 import net.dv8tion.jda.api.interactions.components.selections.SelectionMenu;
@@ -52,7 +57,8 @@ public class MusicCommand extends SlashCommand {
 
         this.children = new SlashCommand[]{
                 new Play(),
-                new Skip()
+                new Skip(),
+                new Stop()
         };
     }
 
@@ -359,7 +365,8 @@ public class MusicCommand extends SlashCommand {
 
             GuildMusicManager player = musicManager.getGuildAudioPlayer(guild);
             player.wantToSkip.add(event.getMember());
-            AtomicLong needForSkip = new AtomicLong(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+            AtomicLong needForSkip = new AtomicLong(
+                    voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
             if (player.wantToSkip.size() >= needForSkip.get() ||
                 (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
                  hasPermDJ(member, voiceChannel))) {
@@ -376,48 +383,112 @@ public class MusicCommand extends SlashCommand {
                                                     jump))
                                             .addActionRow(Button.secondary("skip", "Skip song"))
                                             .complete();
-
-                wait(jump, guild, voiceChannel, player, needForSkip, hook);
+                poll(hook,
+                     (actual, needed) -> "`"+actual+"/"+needed+" needed for skipping` want to skip "+jump+" song, click one button below for vote",
+                     player.wantToSkip,
+                     voiceChannel,
+                     unused -> Math.toIntExact(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
+                     bce -> {
+                         for (int i = 0; i < jump; i++) {
+                             musicManager.skip(guild);
+                         }
+                         bce.editMessage("Skipping `%s` tracks".formatted(jump))
+                            .setActionRow(bce.getButton().asDisabled())
+                            .complete();
+                         player.wantToSkip.clear();},
+                     player.player.getPlayingTrack().getDuration() - player.player.getPlayingTrack().getPosition(),
+                     TimeUnit.MILLISECONDS);
             }
         }
+    }
 
-        private void wait(
-                long jump, Guild guild, VoiceChannel voiceChannel, GuildMusicManager player, AtomicLong needForSkip,
-                InteractionHook hook
-        ) {
-            AudioTrack playingTrack = player.player.getPlayingTrack();
-            eventWaiter.waitForEvent(ButtonClickEvent.class,
-                                     bce -> bce.getMessageIdLong() ==
-                                            hook.retrieveOriginal().complete().getIdLong() &&
-                                            !player.wantToSkip.contains(bce.getMember()),
-                                     bce -> {
-                                         needForSkip.set(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
-                                         player.wantToSkip.add(bce.getMember());
+    private class Stop extends SlashCommand {
 
-                                         if (player.wantToSkip.size() >= needForSkip.get()) {
-                                             for (int i = 0; i < jump; i++) {
-                                                 musicManager.skip(guild);
-                                             }
-                                             bce.editMessage("Skipping `%s` tracks".formatted(jump))
-                                                .setActionRow(bce.getButton().asDisabled())
-                                                .complete();
-                                             player.wantToSkip.clear();
-                                         } else {
-                                             bce.editMessage(("`%s/%s needed for skipping` want to skip %s song," +
-                                                              " click one button below for vote").formatted(
-                                                     player.wantToSkip.size(),
-                                                     needForSkip.get(),
-                                                     jump)).complete();
-                                             wait(jump, guild, voiceChannel, player, needForSkip, hook);
-                                         }
-                                     },
-                                     playingTrack.getDuration() - playingTrack.getPosition(),
-                                     TimeUnit.MILLISECONDS,
-                                     () -> hook.editOriginal("~~%s~~\nTrack end, vote cancelled".formatted(
-                                                       hook.retrieveOriginal().complete().getContentRaw()))
-                                               .setActionRow(Button.secondary("skip", "Skip song").asDisabled())
-                                               .queue(unused -> player.wantToSkip.clear(),
-                                                      new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE)));
+        public Stop() {
+            this.name = "stop"; // Will be used as the sub command.
+            this.help = "Stop music";
+
+            this.options = List.of(
+                    new OptionData(OptionType.BOOLEAN, "force", "Force track skip")
+            );
+        }
+
+        @SuppressWarnings("DuplicatedCode")
+        @Override
+        public void execute(SlashCommandEvent event) {
+            Guild  guild  = event.getGuild();
+            Member member = event.getMember();
+            if (guild == null || member == null) {
+                return;
+            }
+            GuildVoiceState voiceState   = member.getVoiceState();
+            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
+            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
+                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
+            }
+            if (voiceChannel == null || !voiceChannel.getMembers().contains(event.getMember())) {
+                return;
+            }
+
+            GuildMusicManager player = musicManager.getGuildAudioPlayer(guild);
+            player.wantToStop.add(event.getMember());
+            AtomicLong needForStop = new AtomicLong(
+                    voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+            if (player.wantToStop.size() >= needForStop.get() ||
+                (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
+                 hasPermDJ(member, voiceChannel))) {
+                musicManager.destroy(guild);
+                guild.getAudioManager().closeAudioConnection();
+                event.reply("Player stopped :wave:").complete();
+            } else {
+                InteractionHook hook = event.reply(("`%s/%s needed for stopping` want to stop the music," +
+                                                    " click one button below for vote").formatted(
+                                                    player.wantToStop.size(),
+                                                    needForStop.get()))
+                                            .addActionRow(Button.danger("stop", "Stop song"))
+                                            .complete();
+                poll(hook,
+                     (actual, needed) -> "`"+actual+"/"+needed+" needed for skipping` want to stop the music, click one button below for vote",
+                     player.wantToStop,
+                     voiceChannel,
+                     unused -> Math.toIntExact(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
+                     bce -> {
+                         musicManager.destroy(guild);
+                         guild.getAudioManager().closeAudioConnection();
+                         bce.editMessage("Player stopped :wave:")
+                            .setActionRows(disableButtons(bce.getMessage().getActionRows()))
+                            .complete();
+                     },
+                     player.scheduler.queue().stream().mapToLong(AudioTrack::getDuration).sum() - player.player.getPlayingTrack().getPosition(),
+                     TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    private class Queue extends SlashCommand {
+
+        public Queue() {
+            this.name = "queue";
+            this.help = "Track queue related command";
+
+            this.children = new SlashCommand[]{
+                    new Clear()
+            };
+        }
+
+        @Override
+        protected void execute(SlashCommandEvent event) {
+        }
+
+        private class Clear extends SlashCommand {
+            public Clear() {
+                this.name = "clear";
+                this.help = "Clear the queue";
+            }
+
+            @Override
+            protected void execute(SlashCommandEvent event) {
+            }
         }
     }
 
@@ -434,5 +505,78 @@ public class MusicCommand extends SlashCommand {
                      .stream()
                      .map(voiceChannel::getPermissionOverride)
                      .anyMatch(perm -> perm != null && perm.getAllowed().contains(Permission.MANAGE_CHANNEL));
+    }
+
+    private void poll(
+            InteractionHook hook,
+            BiFunction<Integer, Integer, String> originalMessage,
+            List<Member> voted,
+            VoiceChannel voiceChannel,
+            Function<Void, Integer> needTo,
+            Consumer<ButtonClickEvent> onVoteEnd,
+            long timeout,
+            TimeUnit unit
+    ) {
+        poll(hook, originalMessage, bce -> true, voted, voiceChannel, needTo, onVoteEnd, timeout, unit);
+    }
+
+    private void poll(
+            InteractionHook hook,
+            BiFunction<Integer, Integer, String> originalMessage,
+            Predicate<ButtonClickEvent> condition,
+            List<Member> voted,
+            VoiceChannel voiceChannel,
+            Function<Void, Integer> needTo,
+            Consumer<ButtonClickEvent> onVoteEnd,
+            long timeout,
+            TimeUnit unit
+    ) {
+        eventWaiter.waitForEvent(ButtonClickEvent.class,
+                                 condition.and(bce -> bce.getMessageIdLong() ==
+                                                  hook.retrieveOriginal().complete().getIdLong() &&
+                                                  !voted.contains(bce.getMember()) &&
+                                                  voiceChannel.getMembers().contains(bce.getMember())),
+                                 bce -> {
+                                     int apply = needTo.apply(null);
+                                     if (voted.size() >= apply) {
+                                         onVoteEnd.accept(bce);
+                                     } else {
+                                         bce.editMessage(originalMessage.apply(voted.size(), apply)).complete();
+                                         poll(hook,
+                                              originalMessage,
+                                              condition,
+                                              voted,
+                                              voiceChannel,
+                                              needTo,
+                                              onVoteEnd,
+                                              timeout,
+                                              unit
+                                         );
+                                     }
+                                 },
+                                 timeout,
+                                 unit,
+                                 () -> {
+                                     Message         message = hook.retrieveOriginal().complete();
+                                     hook.editOriginal("~~%s~~\nVote ended".formatted(message.getContentRaw()))
+                                         .setActionRows(disableButtons(message.getActionRows()))
+                                         .queue(null, new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE));
+                                     voted.clear();
+                                 });
+    }
+
+    private Collection<ActionRow> disableButtons(Collection<ActionRow> actionRows) {
+        List<ActionRow> rows    = new ArrayList<>();
+        for (ActionRow row : actionRows) {
+            List<Component> components = new ArrayList<>();
+            for (Component component : row.getComponents()) {
+                if (component instanceof Button button) {
+                    component = button.asDisabled();
+                }
+                components.add(component);
+            }
+            rows.add(ActionRow.of(components));
+        }
+        return rows;
     }
 }

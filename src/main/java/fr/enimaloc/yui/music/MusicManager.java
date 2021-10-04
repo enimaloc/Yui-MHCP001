@@ -45,4 +45,13 @@ public class MusicManager {
     public void skip(Guild guild) {
         getGuildAudioPlayer(guild).scheduler.nextTrack();
     }
+
+    public void destroy(Guild guild) {
+        getGuildAudioPlayer(guild).player.destroy();
+        getGuildAudioPlayer(guild).scheduler.queue().clear();
+        getGuildAudioPlayer(guild).wantToSkip.clear();
+        getGuildAudioPlayer(guild).wantToStop.clear();
+        //noinspection SuspiciousMethodCalls
+        musicManagers.remove(guild);
+    }
 }
