@@ -5,6 +5,7 @@ import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.source.AudioSourceManagers;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
+import fr.enimaloc.yui.commands.MusicCommand;
 import java.util.HashMap;
 import java.util.Map;
 import net.dv8tion.jda.api.entities.Guild;
@@ -47,10 +48,17 @@ public class MusicManager {
     }
 
     public void destroy(Guild guild) {
-        getGuildAudioPlayer(guild).player.destroy();
-        getGuildAudioPlayer(guild).scheduler.queue().clear();
-        getGuildAudioPlayer(guild).wantToSkip.clear();
-        getGuildAudioPlayer(guild).wantToStop.clear();
+        GuildMusicManager manager = getGuildAudioPlayer(guild);
+        manager.player.destroy();
+        manager.scheduler.queue().clear();
+        manager.wantToSkip.clear();
+        manager.wantToStop.clear();
+        if (manager.message != null) {
+            manager.message.unpin().complete();
+            manager.message.editMessageComponents(MusicCommand.disableButtons(manager.message.getActionRows()))
+                           .complete();
+            manager.message = null;
+        }
         //noinspection SuspiciousMethodCalls
         musicManagers.remove(guild);
     }

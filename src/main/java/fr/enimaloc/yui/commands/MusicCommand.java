@@ -28,6 +28,7 @@ import java.util.function.Predicate;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.*;
+import net.dv8tion.jda.api.events.Event;
 import net.dv8tion.jda.api.events.interaction.ButtonClickEvent;
 import net.dv8tion.jda.api.events.interaction.GenericInteractionCreateEvent;
 import net.dv8tion.jda.api.events.interaction.SelectionMenuEvent;
@@ -60,7 +61,8 @@ public class MusicCommand extends SlashCommand {
                 new Skip(),
                 new Stop(),
                 new Queue(),
-                new Pause()
+                new Pause(),
+                new NowPlaying()
         };
     }
 
@@ -86,11 +88,13 @@ public class MusicCommand extends SlashCommand {
         @Override
         public void execute(SlashCommandEvent event) {
             Member member = event.getMember();
+            Guild  guild  = event.getGuild();
             if (member == null ||
                 member.getVoiceState() == null ||
-                event.getGuild() == null) {
+                guild == null) {
                 return;
             }
+            GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
 
             String track = Objects.requireNonNull(event.getOption("query")).getAsString();
             try {
@@ -100,10 +104,10 @@ public class MusicCommand extends SlashCommand {
                                           "ytsearch") + ":" + track;
             }
 
-            if (!event.getGuild().getAudioManager().isConnected() &&
+            if (!guild.getAudioManager().isConnected() &&
                 !member.getVoiceState().inVoiceChannel()) {
                 SelectionMenu.Builder musicChannelMenu = SelectionMenu.create("musicChannel").setMaxValues(1);
-                for (VoiceChannel voiceChannel : event.getGuild().getVoiceChannels()) {
+                for (VoiceChannel voiceChannel : guild.getVoiceChannels()) {
                     if (hasPermDJ(member, voiceChannel)) {
                         musicChannelMenu.addOption(voiceChannel.getName(), voiceChannel.getId());
                     }
@@ -129,15 +133,19 @@ public class MusicCommand extends SlashCommand {
                                                      Objects.requireNonNull(sme.getInteraction().getSelectedOptions())
                                                             .get(0)
                                                             .getValue();
-                                             event.getGuild()
-                                                  .getAudioManager()
-                                                  .openAudioConnection(event.getGuild().getVoiceChannelById(channelId));
-                                             musicManager.load(event.getGuild(), finalTrack,
+                                             manager.voiceChannel = guild.getVoiceChannelById(channelId);
+                                             guild
+                                                     .getAudioManager()
+                                                     .openAudioConnection(manager.voiceChannel);
+                                             musicManager.load(guild, finalTrack,
                                                                new ResultHandler(event, sme));
                                          });
                 return;
+            } else if (!guild.getAudioManager().isConnected() && member.getVoiceState().inVoiceChannel()) {
+                manager.voiceChannel = member.getVoiceState().getChannel();
+                guild.getAudioManager().openAudioConnection(manager.voiceChannel);
             }
-            musicManager.load(event.getGuild(), track, new ResultHandler(event));
+            musicManager.load(guild, track, new ResultHandler(event));
         }
 
         private class ResultHandler implements AudioLoadResultHandler {
@@ -161,20 +169,15 @@ public class MusicCommand extends SlashCommand {
                 if (guild == null || member == null) {
                     return;
                 }
-                GuildVoiceState voiceState   = member.getVoiceState();
-                VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
-
-                if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
-                    guild.getAudioManager().openAudioConnection(voiceState.getChannel());
-                } else {
-                    voiceChannel = guild.getAudioManager().getConnectedChannel();
-                }
+                GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
 
                 Objects.requireNonNull(getReplyAction())
-                       .addEmbeds(prepareEmbed(track, voiceChannel).build())
+                       .addEmbeds(prepareEmbed(track, manager.voiceChannel).build())
                        .setEphemeral(true)
                        .complete();
                 musicManager.play(event.getGuild(), track);
+
+                manager.updateMessage();
             }
 
             @Override
@@ -225,17 +228,11 @@ public class MusicCommand extends SlashCommand {
                 if (guild == null || member == null) {
                     return;
                 }
-                GuildVoiceState voiceState   = member.getVoiceState();
-                VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
 
-                if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
-                    guild.getAudioManager().openAudioConnection(voiceState.getChannel());
-                } else {
-                    voiceChannel = guild.getAudioManager().getConnectedChannel();
-                }
+                GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
 
                 Objects.requireNonNull(getReplyAction())
-                       .addEmbeds(prepareEmbed(playlist, voiceChannel).build())
+                       .addEmbeds(prepareEmbed(playlist, manager.voiceChannel).build())
                        .setEphemeral(true)
                        .complete();
 
@@ -252,6 +249,8 @@ public class MusicCommand extends SlashCommand {
                         musicManager.play(guild, track);
                     }
                 }
+
+                manager.updateMessage();
             }
 
             @Override
@@ -350,46 +349,59 @@ public class MusicCommand extends SlashCommand {
             long jump = event.getOption("jump") != null ?
                     Objects.requireNonNull(event.getOption("jump")).getAsLong() :
                     1;
+            Member member = event.getMember();
+            Guild  guild  = event.getGuild();
+            if (member == null || guild == null) {
+                return;
+            }
 
+            skip(eventWaiter,
+                 musicManager,
+                 event,
+                 (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
+                  hasPermDJ(member, musicManager.getGuildAudioPlayer(guild).voiceChannel)),
+                 jump);
+        }
+
+        private static void skip(EventWaiter eventWaiter, MusicManager musicManager, GenericInteractionCreateEvent event, boolean force, long jump) {
             Guild  guild  = event.getGuild();
             Member member = event.getMember();
             if (guild == null || member == null) {
                 return;
             }
-            GuildVoiceState voiceState   = member.getVoiceState();
-            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
-            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
-                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
-            }
-            if (voiceChannel == null) {
+            GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
+            if (manager.voiceChannel == null) {
                 return;
             }
 
-            GuildMusicManager player = musicManager.getGuildAudioPlayer(guild);
-            player.wantToSkip.add(event.getMember());
+            manager.wantToSkip.add(event.getMember());
             AtomicLong needForSkip = new AtomicLong(
-                    voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
-            if (player.wantToSkip.size() >= needForSkip.get() ||
-                (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
-                 hasPermDJ(member, voiceChannel))) {
+                    manager.voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+            if (manager.wantToSkip.size() >= needForSkip.get() || force) {
                 for (int i = 0; i < jump; i++) {
                     musicManager.skip(guild);
                 }
-                event.reply("Skipping `%s` tracks".formatted(jump)).complete();
-                player.wantToSkip.clear();
+                InteractionHook hook = event.reply("Skipping `%s` tracks".formatted(jump)).complete();
+                hook.deleteOriginal().completeAfter(2, TimeUnit.SECONDS);
+
+                manager.wantToSkip.clear();
+                manager.updateMessage();
             } else {
                 InteractionHook hook = event.reply(("`%s/%s needed for skipping` want to skip %s song," +
                                                     " click one button below for vote").formatted(
-                                                    player.wantToSkip.size(),
+                                                    manager.wantToSkip.size(),
                                                     needForSkip.get(),
                                                     jump))
                                             .addActionRow(Button.secondary("skip", "Skip song"))
                                             .complete();
-                poll(hook,
-                     (actual, needed) -> "`"+actual+"/"+needed+" needed for skipping` want to skip "+jump+" song, click one button below for vote",
-                     player.wantToSkip,
-                     voiceChannel,
-                     unused -> Math.toIntExact(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
+                poll(eventWaiter,
+                     hook,
+                     (actual, needed) -> "`" + actual + "/" + needed + " needed for skipping` want to skip " + jump +
+                                         " song, click one button below for vote",
+                     manager.wantToSkip,
+                     manager.voiceChannel,
+                     unused -> Math.toIntExact(
+                             manager.voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
                      bce -> {
                          for (int i = 0; i < jump; i++) {
                              musicManager.skip(guild);
@@ -397,8 +409,12 @@ public class MusicCommand extends SlashCommand {
                          bce.editMessage("Skipping `%s` tracks".formatted(jump))
                             .setActionRow(bce.getButton().asDisabled())
                             .complete();
-                         player.wantToSkip.clear();},
-                     player.player.getPlayingTrack().getDuration() - player.player.getPlayingTrack().getPosition(),
+                         hook.deleteOriginal().completeAfter(2, TimeUnit.SECONDS);
+
+                         manager.wantToSkip.clear();
+                         manager.updateMessage();
+                     },
+                     manager.player.getPlayingTrack().getDuration() - manager.player.getPlayingTrack().getPosition(),
                      TimeUnit.MILLISECONDS);
             }
         }
@@ -423,37 +439,47 @@ public class MusicCommand extends SlashCommand {
             if (guild == null || member == null) {
                 return;
             }
-            GuildVoiceState voiceState   = member.getVoiceState();
-            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
-            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
-                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
-            }
-            if (voiceChannel == null || !voiceChannel.getMembers().contains(event.getMember())) {
+            GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
+            if (manager.voiceChannel == null) {
                 return;
             }
 
-            GuildMusicManager player = musicManager.getGuildAudioPlayer(guild);
-            player.wantToStop.add(event.getMember());
+            stop(eventWaiter,
+                 musicManager,
+                 event,
+                 event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
+                 hasPermDJ(member, manager.voiceChannel),
+                 guild,
+                 member,
+                 manager);
+        }
+
+        private static void stop(
+                EventWaiter eventWaiter, MusicManager musicManager,
+                GenericInteractionCreateEvent event, boolean force, Guild guild, Member member,
+                GuildMusicManager manager
+        ) {
+            manager.wantToStop.add(event.getMember());
             AtomicLong needForStop = new AtomicLong(
-                    voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
-            if (player.wantToStop.size() >= needForStop.get() ||
-                (event.getOption("force") != null && Objects.requireNonNull(event.getOption("force")).getAsBoolean() &&
-                 hasPermDJ(member, voiceChannel))) {
+                    manager.voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2);
+            if (manager.wantToStop.size() >= needForStop.get() || force) {
                 musicManager.destroy(guild);
                 guild.getAudioManager().closeAudioConnection();
                 event.reply("Player stopped :wave:").complete();
             } else {
                 InteractionHook hook = event.reply(("`%s/%s needed for stopping` want to stop the music," +
                                                     " click one button below for vote").formatted(
-                                                    player.wantToStop.size(),
+                                                    manager.wantToStop.size(),
                                                     needForStop.get()))
                                             .addActionRow(Button.danger("stop", "Stop song"))
                                             .complete();
-                poll(hook,
-                     (actual, needed) -> "`"+actual+"/"+needed+" needed for skipping` want to stop the music, click one button below for vote",
-                     player.wantToStop,
-                     voiceChannel,
-                     unused -> Math.toIntExact(voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
+                poll(eventWaiter, hook,
+                     (actual, needed) -> "`" + actual + "/" + needed +
+                                         " needed for skipping` want to stop the music, click one button below for vote",
+                     manager.wantToStop,
+                     manager.voiceChannel,
+                     unused -> Math.toIntExact(
+                             manager.voiceChannel.getMembers().stream().filter(m -> !m.getUser().isBot()).count() / 2),
                      bce -> {
                          musicManager.destroy(guild);
                          guild.getAudioManager().closeAudioConnection();
@@ -461,8 +487,11 @@ public class MusicCommand extends SlashCommand {
                             .setActionRows(disableButtons(bce.getMessage().getActionRows()))
                             .complete();
                      },
-                     player.scheduler.queue().stream().mapToLong(AudioTrack::getDuration).sum() - player.player.getPlayingTrack().getPosition(),
-                     TimeUnit.MILLISECONDS);
+                     5,
+                     TimeUnit.MINUTES);
+                     /*manager.scheduler.queue().stream().mapToLong(AudioTrack::getDuration).sum() -
+                     manager.player.getPlayingTrack().getPosition(),
+                     TimeUnit.MILLISECONDS);*/
             }
         }
     }
@@ -470,8 +499,8 @@ public class MusicCommand extends SlashCommand {
     private class Queue extends SlashCommand {
 
         public Queue() {
-            this.name = "queue";
-            this.help = "Track queue related command";
+            this.name           = "queue";
+            this.help           = "Track queue related command";
             this.defaultEnabled = false;
         }
 
@@ -490,23 +519,110 @@ public class MusicCommand extends SlashCommand {
 
         @Override
         protected void execute(SlashCommandEvent event) {
-            Guild  guild  = event.getGuild();
             Member member = event.getMember();
-            if (guild == null || member == null) {
+            Guild  guild  = event.getGuild();
+            if (member == null ||
+                member.getVoiceState() == null ||
+                guild == null) {
                 return;
             }
-            GuildVoiceState voiceState   = member.getVoiceState();
-            VoiceChannel    voiceChannel = voiceState != null ? voiceState.getChannel() : null;
-            if (!guild.getAudioManager().isConnected() && voiceChannel != null) {
-                guild.getAudioManager().openAudioConnection(voiceState.getChannel());
-            }
-            if (voiceChannel == null || !voiceChannel.getMembers().contains(event.getMember())) {
-                return;
+            GuildMusicManager manager = musicManager.getGuildAudioPlayer(guild);
+
+            pause(musicManager, event, guild, manager);
+        }
+
+        public static void pause(MusicManager musicManager, GenericInteractionCreateEvent event, Guild guild, GuildMusicManager manager) {
+            boolean paused = manager.player.isPaused();
+            musicManager.getGuildAudioPlayer(guild).player.setPaused(!paused);
+            InteractionHook hook = event.reply((paused ? "Unp" : "P") + "aused the music").complete();
+            hook.deleteOriginal().completeAfter(2, TimeUnit.SECONDS);
+
+            manager.updateMessage();
+        }
+
+    }
+
+    private class NowPlaying extends SlashCommand {
+        public NowPlaying() {
+            this.name = "now-playing";
+            this.help = "Display what song is playing";
+
+            this.options = List.of(
+                    new OptionData(OptionType.BOOLEAN, "favorite",
+                                   "Set as favorite message, this permit to make action with this and live update")
+            );
+        }
+
+        @Override
+        protected void execute(SlashCommandEvent event) {
+            GuildMusicManager manager = musicManager.getGuildAudioPlayer(
+                    Objects.requireNonNull(event.getGuild()));
+            InteractionHook hook = event.replyEmbeds(manager.buildNowPlaying().build())
+                                        .addActionRow(Button.primary("favorite", "Favorite"),
+                                                      Button.primary("skip", "Skip"),
+                                                      Button.primary("pause", "Pause"),
+                                                      Button.danger("stop", "Stop"))
+                                        .complete();
+
+            if (event.getOption("favorite") != null) {
+                favorite(manager, hook, null);
             }
 
-            boolean paused = musicManager.getGuildAudioPlayer(guild).player.isPaused();
-            musicManager.getGuildAudioPlayer(guild).player.setPaused(!paused);
-            event.reply((paused ? "Unp" : "P")+"aused the music").complete();
+            repeat(ButtonClickEvent.class,
+                   bce -> bce.getMessageIdLong() == hook.retrieveOriginal().complete().getIdLong() &&
+                          manager.voiceChannel.getMembers().contains(bce.getMember()),
+                   bce -> {
+                       Button button = bce.getButton();
+                       if (button == null || button.getId() == null) {
+                           return;
+                       }
+                       switch (button.getId()) {
+                           case "favorite" -> favorite(manager, hook, bce);
+                           case "skip" -> skip(manager, hook, bce);
+                           case "pause" -> pause(manager, hook, bce);
+                           case "stop" -> stop(manager, hook, bce);
+                       }
+                   },
+                   bce -> manager.player.getPlayingTrack() != null);
+        }
+
+        private void favorite(GuildMusicManager manager, InteractionHook hook, ButtonClickEvent bce) {
+            boolean unfavorite = manager.message != null &&
+                                 manager.message.getIdLong() == hook.retrieveOriginal().complete().getIdLong();
+            if (!unfavorite) {
+                if (manager.message != null) {
+                    manager.message.unpin().complete();
+                }
+                manager.message = hook.retrieveOriginal().complete();
+                manager.message.pin().complete();
+                if (bce != null && !bce.isAcknowledged() && bce.getButton() != null) {
+                    bce.editButton(bce.getButton().withLabel("Unfavorite")).complete();
+                }
+            } else {
+                manager.message.unpin().complete();
+                manager.message = null;
+                if (bce != null && !bce.isAcknowledged() && bce.getButton() != null) {
+                    bce.editButton(bce.getButton().withLabel("Favorite")).complete();
+                }
+            }
+        }
+
+        private void skip(GuildMusicManager manager, InteractionHook hook, ButtonClickEvent bce) {
+            MusicCommand.Skip.skip(eventWaiter, musicManager, bce, false, 1);
+        }
+
+        private void pause(GuildMusicManager manager, InteractionHook hook, ButtonClickEvent bce) {
+            MusicCommand.Pause.pause(musicManager, bce, hook.getInteraction().getGuild(), manager);
+        }
+
+        private void stop(GuildMusicManager manager, InteractionHook hook, ButtonClickEvent bce) {
+            MusicCommand.Stop.stop(eventWaiter,
+                                   musicManager,
+                                   bce,
+                                   false,
+                                   hook.getInteraction().getGuild(),
+                                   bce.getMember(),
+                                   manager);
         }
     }
 
@@ -525,7 +641,8 @@ public class MusicCommand extends SlashCommand {
                      .anyMatch(perm -> perm != null && perm.getAllowed().contains(Permission.MANAGE_CHANNEL));
     }
 
-    private void poll(
+    private static void poll(
+            EventWaiter eventWaiter,
             InteractionHook hook,
             BiFunction<Integer, Integer, String> originalMessage,
             List<Member> voted,
@@ -535,10 +652,11 @@ public class MusicCommand extends SlashCommand {
             long timeout,
             TimeUnit unit
     ) {
-        poll(hook, originalMessage, bce -> true, voted, voiceChannel, needTo, onVoteEnd, timeout, unit);
+        poll(eventWaiter, hook, originalMessage, bce -> true, voted, voiceChannel, needTo, onVoteEnd, timeout, unit);
     }
 
-    private void poll(
+    private static void poll(
+            EventWaiter eventWaiter,
             InteractionHook hook,
             BiFunction<Integer, Integer, String> originalMessage,
             Predicate<ButtonClickEvent> condition,
@@ -551,16 +669,17 @@ public class MusicCommand extends SlashCommand {
     ) {
         eventWaiter.waitForEvent(ButtonClickEvent.class,
                                  condition.and(bce -> bce.getMessageIdLong() ==
-                                                  hook.retrieveOriginal().complete().getIdLong() &&
-                                                  !voted.contains(bce.getMember()) &&
-                                                  voiceChannel.getMembers().contains(bce.getMember())),
+                                                      hook.retrieveOriginal().complete().getIdLong() &&
+                                                      !voted.contains(bce.getMember()) &&
+                                                      voiceChannel.getMembers().contains(bce.getMember())),
                                  bce -> {
                                      int apply = needTo.apply(null);
                                      if (voted.size() >= apply) {
                                          onVoteEnd.accept(bce);
                                      } else {
                                          bce.editMessage(originalMessage.apply(voted.size(), apply)).complete();
-                                         poll(hook,
+                                         poll(eventWaiter,
+                                              hook,
                                               originalMessage,
                                               condition,
                                               voted,
@@ -575,7 +694,7 @@ public class MusicCommand extends SlashCommand {
                                  timeout,
                                  unit,
                                  () -> {
-                                     Message         message = hook.retrieveOriginal().complete();
+                                     Message message = hook.retrieveOriginal().complete();
                                      hook.editOriginal("~~%s~~\nVote ended".formatted(message.getContentRaw()))
                                          .setActionRows(disableButtons(message.getActionRows()))
                                          .queue(null, new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE));
@@ -583,8 +702,36 @@ public class MusicCommand extends SlashCommand {
                                  });
     }
 
-    private Collection<ActionRow> disableButtons(Collection<ActionRow> actionRows) {
-        List<ActionRow> rows    = new ArrayList<>();
+    private <T extends Event> void repeat(
+            Class<T> eventClazz,
+            Predicate<T> condition,
+            Consumer<T> action,
+            Function<T, Boolean> conditionToContinue
+    ) {
+        repeat(eventClazz, condition, action, conditionToContinue, -1, null, null);
+    }
+
+    private <T extends Event> void repeat(
+            Class<T> classType,
+            Predicate<T> condition,
+            Consumer<T> action,
+            Function<T, Boolean> conditionToContinue,
+            long timeout,
+            TimeUnit unit,
+            Runnable timeoutAction
+    ) {
+        eventWaiter.waitForEvent(classType, condition, action.andThen(event -> {
+                                     if (conditionToContinue.apply(event)) {
+                                         repeat(classType, condition, action, conditionToContinue, timeout, unit, timeoutAction);
+                                     }
+                                 }),
+                                 timeout,
+                                 unit,
+                                 timeoutAction);
+    }
+
+    public static Collection<ActionRow> disableButtons(Collection<ActionRow> actionRows) {
+        List<ActionRow> rows = new ArrayList<>();
         for (ActionRow row : actionRows) {
             List<Component> components = new ArrayList<>();
             for (Component component : row.getComponents()) {

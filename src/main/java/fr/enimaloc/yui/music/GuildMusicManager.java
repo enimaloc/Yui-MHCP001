@@ -4,19 +4,20 @@ package fr.enimaloc.yui.music;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter;
-import com.sedmelluq.discord.lavaplayer.tools.FriendlyException;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
-import io.sentry.Sentry;
-import io.sentry.SentryEvent;
-import io.sentry.SentryLevel;
-import io.sentry.protocol.Message;
+import com.sedmelluq.discord.lavaplayer.track.AudioTrackInfo;
+import fr.enimaloc.enutils.classes.DateUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.VoiceChannel;
+import net.dv8tion.jda.api.exceptions.ErrorHandler;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 
 /**
  * Holder for both the player and a track scheduler for one guild.
@@ -42,6 +43,16 @@ public class GuildMusicManager {
     public List<Member> wantToStop = new ArrayList<>();
 
     /**
+     * Bounded voice channel
+     */
+    public VoiceChannel voiceChannel;
+
+    /**
+     * favorite message
+     */
+    public Message message;
+
+    /**
      * Creates a player and a track scheduler.
      *
      * @param manager Audio player manager to use for creating the player.
@@ -57,6 +68,58 @@ public class GuildMusicManager {
      */
     public AudioPlayerSendHandler getSendHandler() {
         return new AudioPlayerSendHandler(player);
+    }
+
+    public void updateMessage() {
+        if (message != null) {
+            message.editMessageEmbeds(buildNowPlaying().build())
+                   .queue(null, new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE));
+        }
+    }
+
+    public EmbedBuilder buildNowPlaying() {
+        AudioTrack                item       = player.getPlayingTrack();
+        if (item == null) {
+            return new EmbedBuilder().setTitle("No song");
+        }
+        BlockingQueue<AudioTrack> tracksList = scheduler.queue();
+
+        AudioTrackInfo itemInfo = item.getInfo();
+        String         title    = itemInfo.title;
+        String         uri      = itemInfo.uri;
+        String         author   = itemInfo.author;
+
+        String durationStr = itemInfo.isStream ?
+                "Livestream" :
+                DateUtils.formatDateFromMillis(itemInfo.length, "%2$d:%3$02d:%4$02d");
+
+        String totalDurationStr = itemInfo.isStream ?
+                "Livestream" :
+                DateUtils.formatDateFromMillis(tracksList.stream().mapToLong(AudioTrack::getDuration).sum()+itemInfo.length,
+                                               "%2$d:%3$02d:%4$02d");
+
+        EmbedBuilder builder = new EmbedBuilder()
+                .setTitle("Playing `%s`".formatted(title), uri)
+                .appendDescription("**Author**: %s".formatted(author))
+                .appendDescription("\n**Duration**: %s".formatted(durationStr))
+                .appendDescription("\n**Total Duration**: %s".formatted(totalDurationStr))
+                .addField("Bound", "**Voice channel**: %s".formatted(voiceChannel.getAsMention()), true);
+
+        StringBuilder next = new StringBuilder();
+        int           i    = 0;
+        for (; i < tracksList.size(); i++) {
+            if (i > 5) {
+                break;
+            }
+            AudioTrack     audioTrack = tracksList.stream().toList().get(i);
+            AudioTrackInfo info       = audioTrack.getInfo();
+            next.append("\n[%s | %s](%s)".formatted(info.title, info.author, info.uri));
+        }
+        if (!next.isEmpty()) {
+            builder.addField("Next %s tracks".formatted(Math.min(i, 5)), next.substring(1), false);
+        }
+
+        return builder;
     }
 
     public class YTrackScheduler extends AudioEventAdapter {
@@ -104,6 +167,12 @@ public class GuildMusicManager {
 
         public BlockingQueue<AudioTrack> queue() {
             return queue;
+        }
+
+        @Override
+        public void onTrackStart(AudioPlayer player, AudioTrack track) {
+            updateMessage();
+            super.onTrackStart(player, track);
         }
     }
 }
