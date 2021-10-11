@@ -3,23 +3,19 @@ plugins {
 }
 
 group 'fr.enimaloc'
-version '0.0.0'
+version '0.1.0'
 
-def targetJavaVersion = 17
+def targetJavaVersion = 16
 java {
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
-    if (JavaVersion.current() < javaVersion) {
-        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    }
 }
 compileJava.options.encoding = "UTF-8"
 
 repositories {
     mavenCentral()
     mavenLocal()
-    jcenter()
     maven { url "https://m2.enimaloc.fr/maven" }
     maven { url "https://m2.chew.pro/releases" }
     maven { url "https://m2.dv8tion.net/releases" }
@@ -35,7 +31,7 @@ dependencies {
     implementation 'com.sedmelluq:lavaplayer:1.3.78'
 
     implementation 'ch.qos.logback:logback-classic:1.2.6'
-    implementation 'io.sentry:sentry:5.1.2'
+    implementation 'io.sentry:sentry:5.2.1'
 }
 
 test {
