@@ -5,7 +5,7 @@ plugins {
 group 'fr.enimaloc'
 version '0.0.0'
 
-def targetJavaVersion = 17
+def targetJavaVersion = 16
 java {
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
