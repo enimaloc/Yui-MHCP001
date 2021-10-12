@@ -59,7 +59,7 @@ public class GuildMusicManager {
      */
     public GuildMusicManager(AudioPlayerManager manager) {
         this.player    = manager.createPlayer();
-        this.scheduler = new YTrackScheduler(player);
+        this.scheduler = new YTrackScheduler();
         player.addListener(scheduler);
     }
 
@@ -123,15 +123,10 @@ public class GuildMusicManager {
     }
 
     public class YTrackScheduler extends AudioEventAdapter {
-        private final AudioPlayer player;
         private final BlockingQueue<AudioTrack> queue;
 
-        /**
-         * @param player The audio player this scheduler uses
-         */
-        public YTrackScheduler(AudioPlayer player) {
-            this.player = player;
-            this.queue = new LinkedBlockingQueue<>();
+        public YTrackScheduler() {
+            this.queue   = new LinkedBlockingQueue<>();
         }
 
         /**
@@ -154,7 +149,12 @@ public class GuildMusicManager {
         public void nextTrack() {
             // Start the next track, regardless of if something is already playing or not. In case queue was empty, we are
             // giving null to startTrack, which is a valid argument and will simply stop the player.
-            player.startTrack(queue.poll(), false);
+            AudioTrack nextTrack = queue.poll();
+            if (nextTrack != null) {
+                player.startTrack(nextTrack, false);
+            } else {
+                voiceChannel.getGuild().getAudioManager().closeAudioConnection();
+            }
         }
 
         @Override

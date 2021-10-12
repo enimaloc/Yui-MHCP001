@@ -1,9 +1,7 @@
 package fr.enimaloc.yui;
 
 public class Constant {
-    public static final Version VERSION = new Version(0, 0, 0, new String[]{"beta"}, new String[]{"draft"});
-    
-    public static final String PREFIX = "!";
+    public static final Version VERSION = new Version(0, 1, 1, new String[]{"beta"}, new String[]{"draft"});
     
     public static final String EMOJI_SUCCESS = "";
     public static final String EMOJI_WARNING = "";
