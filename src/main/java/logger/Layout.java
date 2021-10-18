@@ -20,22 +20,39 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.core.LayoutBase;
-import io.sentry.Sentry;
-import io.sentry.SentryEvent;
-import io.sentry.protocol.Message;
-import io.sentry.util.CollectionUtils;
-
+import fr.enimaloc.yui.Constant;
+import fr.enimaloc.yui.Yui;
+import java.awt.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalAccessor;
 import java.util.*;
+import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.entities.Activity;
+import net.dv8tion.jda.api.entities.MessageEmbed;
+import net.dv8tion.jda.api.entities.TextChannel;
+import net.dv8tion.jda.api.requests.restaction.MessageAction;
+import net.dv8tion.jda.api.utils.AttachmentOption;
+import net.dv8tion.jda.api.utils.Timestamp;
 
 public class Layout extends LayoutBase<ILoggingEvent> {
-    
+
     public static final String ANSI_COLOR_PREFIX = "\u001B[";
     public static final String ANSI_COLOR_SUFFIX = "m";
-    
+
     public static final String RESET = ANSI_COLOR_PREFIX + "0" + ANSI_COLOR_SUFFIX;
-    
+
     public static final String BLACK   = "0";
     public static final String RED     = "1";
     public static final String GREEN   = "2";
@@ -44,7 +61,7 @@ public class Layout extends LayoutBase<ILoggingEvent> {
     public static final String MAGENTA = "5";
     public static final String CYAN    = "6";
     public static final String WHITE   = "7";
-    
+
     public static final String FOREGROUND         = "3";
     public static final String FOREGROUND_BLACK   = ANSI_COLOR_PREFIX + FOREGROUND + BLACK + ANSI_COLOR_SUFFIX;
     public static final String FOREGROUND_RED     = ANSI_COLOR_PREFIX + FOREGROUND + RED + ANSI_COLOR_SUFFIX;
@@ -54,7 +71,7 @@ public class Layout extends LayoutBase<ILoggingEvent> {
     public static final String FOREGROUND_MAGENTA = ANSI_COLOR_PREFIX + FOREGROUND + MAGENTA + ANSI_COLOR_SUFFIX;
     public static final String FOREGROUND_CYAN    = ANSI_COLOR_PREFIX + FOREGROUND + CYAN + ANSI_COLOR_SUFFIX;
     public static final String FOREGROUND_WHITE   = ANSI_COLOR_PREFIX + FOREGROUND + WHITE + ANSI_COLOR_SUFFIX;
-    
+
     public static final String BACKGROUND         = "4";
     public static final String BACKGROUND_BLACK   = ANSI_COLOR_PREFIX + BACKGROUND + BLACK + ANSI_COLOR_SUFFIX;
     public static final String BACKGROUND_RED     = ANSI_COLOR_PREFIX + BACKGROUND + RED + ANSI_COLOR_SUFFIX;
@@ -64,7 +81,7 @@ public class Layout extends LayoutBase<ILoggingEvent> {
     public static final String BACKGROUND_MAGENTA = ANSI_COLOR_PREFIX + BACKGROUND + MAGENTA + ANSI_COLOR_SUFFIX;
     public static final String BACKGROUND_CYAN    = ANSI_COLOR_PREFIX + BACKGROUND + CYAN + ANSI_COLOR_SUFFIX;
     public static final String BACKGROUND_WHITE   = ANSI_COLOR_PREFIX + BACKGROUND + WHITE + ANSI_COLOR_SUFFIX;
-    
+
     String  traceColor         = FOREGROUND_BLUE;
     String  debugColor         = FOREGROUND_CYAN;
     String  infoColor          = FOREGROUND_GREEN;
@@ -73,36 +90,18 @@ public class Layout extends LayoutBase<ILoggingEvent> {
     String  dateFormat;
     boolean displayThreadName  = true;
     boolean displayLoggerName  = true;
-    boolean sendErrorToSentry  = true;
     int     minWidthLevel      = 5;
     int     minWidthThreadName = 22;
     int     minWidthLoggerName = 1;
-    
+
+    Color discordTraceColor = Color.BLUE;
+    Color discordDebugColor = Color.CYAN;
+    Color discordInfoColor  = Color.GREEN;
+    Color discordWarnColor  = Color.YELLOW;
+    Color discordErrorColor = Color.RED;
+
     @Override
     public String doLayout(ILoggingEvent event) {
-        String reportId = "";
-        if (sendErrorToSentry && event.getThrowableProxy() instanceof ThrowableProxy) {
-            ThrowableProxy tp = (ThrowableProxy) event.getThrowableProxy();
-            
-            Message message = new Message();
-            message.setMessage(event.getMessage());
-            message.setFormatted(event.getFormattedMessage());
-            message.setParams(toParams(event.getArgumentArray()));
-            
-            SentryEvent sentryEvent = new SentryEvent(new Date(event.getTimeStamp()));
-            sentryEvent.setMessage(message);
-            sentryEvent.setLogger(event.getLoggerName());
-            sentryEvent.setExtra("thread_name", event.getThreadName());
-            sentryEvent.getContexts().put(
-                    "MDC",
-                    CollectionUtils.filterMapEntries(event.getMDCPropertyMap(), entry -> entry.getValue() != null)
-            );
-            sentryEvent.setThrowable(tp.getThrowable());
-            
-            reportId = Sentry.captureEvent(sentryEvent).toString();
-            tp.getThrowable().printStackTrace();
-        }
-        
         StringBuilder out = new StringBuilder();
         switch (event.getLevel().toInt()) {
             case Level.TRACE_INT -> out.append(traceColor);
@@ -112,7 +111,7 @@ public class Layout extends LayoutBase<ILoggingEvent> {
             case Level.ERROR_INT -> out.append(errorColor);
         }
         out.append('[').append((dateFormat != null ? new SimpleDateFormat(dateFormat) : new SimpleDateFormat())
-                .format(new Date(event.getTimeStamp())))
+                                       .format(new Date(event.getTimeStamp())))
            .append("] [").append(String.format("%-" + minWidthLevel + "s", event.getLevel().toString()));
         if (displayThreadName) {
             out.append("] [").append(String.format("%-" + minWidthThreadName + "s", event.getThreadName()));
@@ -124,13 +123,120 @@ public class Layout extends LayoutBase<ILoggingEvent> {
             ));
         }
         out.append("] ").append(event.getFormattedMessage());
-        if (!reportId.isEmpty()) {
-            out.append(" {Report ID: ").append(reportId).append("}");
-        }
         out.append(RESET).append('\n');
+
+        File        stacktrace = null;
+        TextChannel channel;
+        if (event.getLevel().isGreaterOrEqual(Level.toLevel(
+                System.getenv("REPORT_LEVEL_TO_DISCORD") != null ?
+                        System.getenv("REPORT_LEVEL_TO_DISCORD").toUpperCase(Locale.ROOT) :
+                        null,
+                Level.WARN
+        )) && System.getenv("REPORT_DISCORD_CHANNEL") != null
+            && (channel = Yui.getJda().getTextChannelById(System.getenv("REPORT_DISCORD_CHANNEL"))) != null) {
+
+            EmbedBuilder builder = new EmbedBuilder();
+            builder.appendDescription(out.toString()
+                                         .replaceAll(Pattern.quote(ANSI_COLOR_PREFIX) + "\\d*" +
+                                                     Pattern.quote(ANSI_COLOR_SUFFIX), ""))
+                   .setTimestamp(Instant.ofEpochMilli(event.getTimeStamp()))
+                   .setColor(switch (event.getLevel().toInt()) {
+                       case Level.TRACE_INT -> discordTraceColor;
+                       case Level.DEBUG_INT -> discordDebugColor;
+                       case Level.INFO_INT -> discordInfoColor;
+                       case Level.WARN_INT -> discordWarnColor;
+                       case Level.ERROR_INT -> discordErrorColor;
+                       default -> throw new IllegalStateException("Unexpected value: " + event.getLevel().toInt());
+                   });
+
+            if (event.getThrowableProxy() instanceof ThrowableProxy throwable) {
+                StringBuilder stringBuilder = new StringBuilder();
+                try {
+                    stacktrace = File.createTempFile("yui-", "");
+                    stacktrace.deleteOnExit();
+                    throwable.getThrowable().printStackTrace(new PrintStream(stacktrace));
+
+                    List<String> lines = Files.readAllLines(stacktrace.toPath());
+                    for (String line : lines) {
+                        String githubUrl  = getGithubUrl(line);
+                        int    returnCode = getReturnCode(githubUrl);
+                        if (returnCode == 200) {
+                            line = line.replaceAll("\\((.*)\\)", "([$1](" + githubUrl + "))");
+                        }
+                        if (stringBuilder.length() + line.length() < MessageEmbed.VALUE_MAX_LENGTH) {
+                            stringBuilder.append("\n").append(line);
+                        }
+                    }
+
+//                    builder.appendDescription("\n\n[Stacktrace file](attachment://stacktrace.txt)");
+                    builder.addField("Exception", stringBuilder.toString().replaceFirst("\n", ""), false);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            MessageAction messageAction = channel.sendMessageEmbeds(builder.build());
+            if (stacktrace != null) {
+                messageAction = messageAction.addFile(stacktrace, "stacktrace.txt");
+            }
+            messageAction.complete();
+        }
+        if (event.getThrowableProxy() instanceof ThrowableProxy throwable) {
+            throwable.getThrowable().printStackTrace();
+        }
+
         return out.toString();
     }
-    
+
+    private String getGithubUrl(String line) {
+        line = line.replaceFirst("\tat ", "");
+        String url = "https://github.com/";
+        if (line.startsWith("fr.enimaloc.yui")) {
+            url += "enimaloc/Yui-MHCP001/tree/" + Constant.GIT_BRANCH + "/src/main/java/";
+//        } else if (line.startsWith("com.jagrosh.jdautilities")) {
+//            url += "Chew/JDA-Chewtils/tree/master/src/main/java/";
+        } else if (line.startsWith("net.dv8tion.jda")) {
+            url += "DV8FromTheWorld/JDA/tree/release/src/main/java/";
+        } else {
+            return null;
+        }
+        return getGithubUrl(url, line);
+    }
+
+    private String getGithubUrl(String repositoryUrl, String line) {
+        try {
+            line = line.replaceFirst("\tat ", "");
+            String file = line.substring(0, line.lastIndexOf('('));
+            file = file.substring(0, file.lastIndexOf('.'));
+            file = Arrays.stream(file.split("\\."))
+                         .map(s -> s.contains("$") ? s.split("\\$")[0] : s)
+                         .collect(Collectors.joining("."));
+            String lineNumber = line.replaceFirst("[^(]*\\([^:]*", "");
+            lineNumber = lineNumber.substring(1, lineNumber.length() - 1);
+            repositoryUrl += file.replaceAll("\\.", "/");
+            repositoryUrl += ".";
+            repositoryUrl += line.split("\\.")[line.split("\\.").length - 1].split(":")[0];
+            repositoryUrl += "#L" + lineNumber;
+
+            return repositoryUrl;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private int getReturnCode(String url) {
+        try {
+            URL               page       = new URL(url);
+            HttpURLConnection connection = (HttpURLConnection) page.openConnection();
+            connection.setRequestMethod("GET");
+            connection.connect();
+            return connection.getResponseCode();
+        } catch (IOException ignored) {
+        }
+
+        return 456;
+    }
+
     private List<String> toParams(Object[] arguments) {
         if (arguments != null) {
             return Arrays.stream(arguments)
