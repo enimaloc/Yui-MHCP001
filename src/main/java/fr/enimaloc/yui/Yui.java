@@ -4,6 +4,7 @@ import com.jagrosh.jdautilities.command.CommandClient;
 import com.jagrosh.jdautilities.command.CommandClientBuilder;
 import com.jagrosh.jdautilities.command.SlashCommand;
 import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
+import fr.enimaloc.yui.commands.ModerationCommand;
 import fr.enimaloc.yui.commands.MusicCommand;
 import fr.enimaloc.yui.music.MusicManager;
 import java.util.Arrays;
@@ -35,7 +36,8 @@ public class Yui {
                 .setHelpWord("help")
                 .setEmojis(Constant.EMOJI_SUCCESS, Constant.EMOJI_WARNING, Constant.EMOJI_ERROR)
                 .addSlashCommands(new SlashCommand[]{
-                        new MusicCommand(eventWaiter, musicManager)
+                        new MusicCommand(eventWaiter, musicManager),
+                        new ModerationCommand()
                 })
                 .setOwnerId(Constant.OWNERS_ID[0]+"")
                 .forceGuildOnly(System.getenv("dev") != null ? "854508847896723526" : null)
