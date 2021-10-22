@@ -23,28 +23,26 @@ import ch.qos.logback.core.LayoutBase;
 import fr.enimaloc.yui.Constant;
 import fr.enimaloc.yui.Yui;
 import java.awt.*;
-import java.io.File;
-import java.io.IOException;
-import java.io.PrintStream;
+import java.io.*;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
-import java.time.ZonedDateTime;
-import java.time.temporal.Temporal;
-import java.time.temporal.TemporalAccessor;
-import java.util.*;
 import java.util.List;
+import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import net.dv8tion.jda.api.EmbedBuilder;
-import net.dv8tion.jda.api.entities.Activity;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.TextChannel;
+import net.dv8tion.jda.api.exceptions.ErrorHandler;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.restaction.MessageAction;
-import net.dv8tion.jda.api.utils.AttachmentOption;
-import net.dv8tion.jda.api.utils.Timestamp;
+import org.json.JSONObject;
 
 public class Layout extends LayoutBase<ILoggingEvent> {
 
@@ -149,28 +147,23 @@ public class Layout extends LayoutBase<ILoggingEvent> {
                        default -> throw new IllegalStateException("Unexpected value: " + event.getLevel().toInt());
                    });
 
+            List<String> lines = null;
             if (event.getThrowableProxy() instanceof ThrowableProxy throwable) {
-                StringBuilder stringBuilder = new StringBuilder();
                 try {
                     stacktrace = File.createTempFile("yui-", "");
                     stacktrace.deleteOnExit();
                     throwable.getThrowable().printStackTrace(new PrintStream(stacktrace));
 
-                    List<String> lines = Files.readAllLines(stacktrace.toPath());
+                    lines = Files.readAllLines(stacktrace.toPath());
+                    StringBuilder stringBuilder = new StringBuilder();
                     for (String line : lines) {
-                        String githubUrl  = getGithubUrl(line);
-                        int    returnCode = getReturnCode(githubUrl);
-                        if (returnCode == 200) {
-                            line = line.replaceAll("\\((.*)\\)", "([$1](" + githubUrl + "))");
-                        }
                         if (stringBuilder.length() + line.length() < MessageEmbed.VALUE_MAX_LENGTH) {
                             stringBuilder.append("\n").append(line);
                         }
                     }
-
-//                    builder.appendDescription("\n\n[Stacktrace file](attachment://stacktrace.txt)");
-                    builder.addField("Exception", stringBuilder.toString().replaceFirst("\n", ""), false);
-                } catch (IOException e) {
+                    builder.addField("Exception", stringBuilder.toString().replaceFirst("\n", ""), false)
+                           .setFooter("Wait a couple of minute to have formatted output, stacktrace can be less than expected");
+                } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
@@ -179,13 +172,42 @@ public class Layout extends LayoutBase<ILoggingEvent> {
             if (stacktrace != null) {
                 messageAction = messageAction.addFile(stacktrace, "stacktrace.txt");
             }
-            messageAction.complete();
+            List<String> finalLines = lines;
+            messageAction.queue(message -> {
+                if (finalLines != null) {
+                    new Thread(() -> formatStacktrace(finalLines, message)).start();
+                }
+            });
         }
         if (event.getThrowableProxy() instanceof ThrowableProxy throwable) {
             throwable.getThrowable().printStackTrace();
         }
 
         return out.toString();
+    }
+
+    private void formatStacktrace(List<String> lines, Message message) {
+        StringBuilder stringBuilder = new StringBuilder();
+        for (String line : lines) {
+            String githubUrl = getGithubUrl(line);
+            githubUrl = createShortenUrl(githubUrl, githubUrl);
+            int returnCode = getReturnCode(githubUrl);
+            if (returnCode == 200) {
+                line = line.replaceAll("\\((.*)\\)", "([$1](" + githubUrl + "))");
+            }
+            if (stringBuilder.length() + line.length() < MessageEmbed.VALUE_MAX_LENGTH) {
+                stringBuilder.append("\n").append(line);
+            } else {
+                break;
+            }
+        }
+        message.editMessageEmbeds(
+                new EmbedBuilder(message.getEmbeds().get(0))
+                        .clearFields()
+                        .addField("Exception", stringBuilder.toString().replaceFirst("\n", ""), false)
+                        .setFooter(null)
+                        .build()
+        ).queue(null, new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE));
     }
 
     private String getGithubUrl(String line) {
@@ -235,6 +257,49 @@ public class Layout extends LayoutBase<ILoggingEvent> {
         }
 
         return 456;
+    }
+
+    public String createShortenUrl(String originalUrl, String onError) {
+        try {
+            new URL(originalUrl);
+        } catch (MalformedURLException e) {
+            return onError;
+        }
+        try {
+            URL               page       = new URL("https://lnk.enimaloc.fr/rest/v2/short-urls");
+            HttpURLConnection connection = (HttpURLConnection) page.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("accept", "application/json");
+            connection.setRequestProperty("X-Api-Key", System.getenv("LNK_API_KEY"));
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+            connection.setDoInput(true);
+
+            OutputStreamWriter wr = new OutputStreamWriter(connection.getOutputStream());
+            wr.write(String.format("{" +
+                                   "\"longUrl\": \"%s\"," +
+                                   "\"crawlable\": false," +
+                                   "\"tags\": [\"yui-bug-shortlink\"]" +
+                                   "}", originalUrl));
+            wr.flush();
+
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(connection.getInputStream(),
+                                                                              StandardCharsets.UTF_8))) {
+                String responseLine;
+                while ((responseLine = br.readLine()) != null) {
+                    if (connection.getResponseCode() != 200) {
+                        System.out.println("responseLine = " + responseLine);
+                    } else {
+                        JSONObject object = new JSONObject(responseLine);
+                        if (object.has("shortUrl")) {
+                            return object.getString("shortUrl");
+                        }
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return onError;
     }
 
     private List<String> toParams(Object[] arguments) {
