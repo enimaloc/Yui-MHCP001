@@ -3,11 +3,10 @@ package fr.enimaloc.yui;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import fr.enimaloc.jvmutils.JavaUtils;
-import io.sentry.Sentry;
+import java.util.Locale;
 import org.slf4j.LoggerFactory;
 
 import javax.security.auth.login.LoginException;
-import java.util.Locale;
 
 public class Main {
     
@@ -18,14 +17,6 @@ public class Main {
                         System.getenv("logLevel") != null ? System.getenv("logLevel").toUpperCase(Locale.ROOT) : null,
                         Level.INFO
                 ));
-        
-        if (System.getenv("sentryDns") != null) {
-            Sentry.init(options -> {
-                options.setDsn(System.getenv("sentryDns"));
-                options.setDist(System.getProperty("os.arch"));
-                options.setEnvironment(System.getenv("dev") != null ? "Development" : "Production");
-            });
-        }
     
         try {
             new Yui();
