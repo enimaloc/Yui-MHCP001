@@ -27,6 +27,8 @@ dependencies {
     implementation 'fr.enimaloc.enutils:classes:0.0.3'
     implementation 'fr.enimaloc.enutils:hardwareUtils:0.0.3'
 
+    implementation 'org.fastily:jwiki:1.8.0'
+
     implementation 'pw.chew:jda-chewtils:1.22.0'
     implementation 'net.dv8tion:JDA:4.3.0_331'
 
@@ -52,6 +54,32 @@ processResources {
     filesMatching('constant.txt') {
         expand props
     }
+}
+
+task buildImage(type: Exec) {
+    group 'docker'
+    dependsOn 'clean', 'shadowJar'
+    commandLine 'docker', 'image', 'build',
+            '-t',"enimaloc/${project.name.toLowerCase()}:latest",
+            '-t',"enimaloc/${project.name.toLowerCase()}:${project.version}",
+            '.'
+}
+
+task publishVersionImage(type: Exec) {
+    group 'docker'
+    dependsOn 'buildImage'
+    commandLine 'docker','image','push',"enimaloc/${project.name.toLowerCase()}:${project.version}"
+}
+
+task publishLatestImage(type: Exec) {
+    group 'docker'
+    dependsOn 'buildImage'
+    commandLine 'docker','image','push',"enimaloc/${project.name.toLowerCase()}:latest"
+}
+
+task publishAllImage {
+    group 'docker'
+    dependsOn 'publishVersionImage', 'publishLatestImage'
 }
 
 def gitBranch() {
