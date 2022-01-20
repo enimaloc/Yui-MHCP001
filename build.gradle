@@ -38,8 +38,8 @@ dependencies {
 
 //    implementation 'pw.chew:jda-chewtils:1.22.0'
 
-    implementation 'pw.chew:jda-chewtils:1.JDA-adapt'
-    implementation 'net.dv8tion:JDA:5.0.0-alpha.4'
+    implementation 'pw.chew:jda-chewtils:1.24.1'
+    implementation 'net.dv8tion:JDA:4.4.0'
 
     implementation 'org.json:json:20211205'
 
